@@ -1,7 +1,6 @@
 import time
 import base64
 import requests
-import threading
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -12,8 +11,6 @@ STATS_PAGE  = "state/wireless_state.asp"
 USERNAME    = "admin"
 PASSWORD    = "admin"
 DURATION    = 30  # durasi pengukuran dalam detik
-# MAC Address perangkat kamu (yang sedang konek WiFi)
-DEVICE_MAC  = "cc:06:77:38:d9:18"
 # =======================================
 
 HEADERS = {
@@ -33,28 +30,33 @@ def login_to_router(session):
     res = session.post(urljoin(BASE_URL, LOGIN_URL), data=login_data, headers=HEADERS)
     return "menu.html" in res.text or "logout.asp" in res.text or session.cookies.get_dict()
 
-def fetch_stats_page(session):
-    url = BASE_URL + "/cgi-bin/status_cgi"
-    response = session.get(url)
-    response.encoding = 'utf-8'
-    html = response.text
+def get_rx_tx(session):
+    res = session.get(urljoin(BASE_URL, STATS_PAGE), headers=HEADERS, timeout=5)
+
+    # Simpan halaman untuk debugging
     with open("debug_stats.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    return html
+        f.write(res.text)
+    print("📄 Halaman stats disimpan sebagai debug_stats.html")
 
-def get_rx_tx(html):
-    soup = BeautifulSoup(html, 'html.parser')
+    soup = BeautifulSoup(res.text, "html.parser")
+    rows = soup.find_all("tr")
 
-    rx_tag = soup.find(id="stream_rbc")  # Received Bytes Count
-    tx_tag = soup.find(id="stream_sbc")  # Sent Bytes Count
+    rx = tx = None
+    for row in rows:
+        cells = row.find_all("td")
+        if len(cells) >= 2:
+            label = cells[0].text.strip().lower()
+            value = cells[1].text.strip().replace(",", "")
+            if "received bytes count" in label:
+                rx = int(value)
+            elif "sent bytes count" in label:
+                tx = int(value)
 
-    if rx_tag is None or tx_tag is None:
-        raise ValueError("❌ Gagal menemukan RX/TX di HTML. Struktur halaman mungkin berubah.")
-
-    rx = int(rx_tag.text.strip())
-    tx = int(tx_tag.text.strip())
+    if rx is None or tx is None:
+        raise ValueError("Gagal menemukan RX/TX dari halaman.")
 
     return rx, tx
+
 
 def generate_dummy_traffic(duration):
     try:
@@ -86,8 +88,7 @@ def main():
             return
 
         print("📶 Mengambil RX/TX awal...")
-        html1 = fetch_stats_page(session)
-        rx1, tx1 = get_rx_tx(html1)
+        rx1, tx1 = get_rx_tx(session)
         print(f"   RX awal: {rx1} byte")
         print(f"   TX awal: {tx1} byte")
         time.sleep(0.5)
@@ -95,8 +96,7 @@ def main():
         generate_dummy_traffic(DURATION)
 
         print("📶 Mengambil RX/TX akhir...")
-        html2 = fetch_stats_page(session)
-        rx2, tx2 = get_rx_tx(html2)
+        rx2, tx2 = get_rx_tx(session)
         print(f"   RX akhir: {rx2} byte")
         print(f"   TX akhir: {tx2} byte")
 
@@ -105,6 +105,6 @@ def main():
         print("\n📈 Kecepatan Internet (dalam {} detik):".format(DURATION))
         print(f"⬇️ Download : {dl_speed} Mbps ({delta_rx} byte data)")
         print(f"⬆️ Upload   : {ul_speed} Mbps ({delta_tx} byte data)")
-        
+
 if __name__ == "__main__":
     main()
